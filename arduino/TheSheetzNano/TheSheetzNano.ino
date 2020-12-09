@@ -16,14 +16,14 @@ int param1;
 String param2;
 
 //#define LEDS_PER_CANDLE 2
+#define LEDS_PER_CANDLE 3
 
 #define REMOTE_TURN_ON_OFF_RATE 5
 #define SCREENSAVER_ACTIVATION_DURATION 120
 #define CANDLE_TURN_ON_OFF_SOUND
 
-#define LED_PIN_30M 6
-#define LED_PIN_60M 8
-
+//#define LED_PIN 6
+#define LED_PIN 8
 #define REMOTE_ENABLE_PIN 12
 
 byte ANALOG_INPUT_PINS[] = {  A0,  A1,  A2,  A3,  A4,  A5,  A6,  A7 };
@@ -40,15 +40,11 @@ byte ANALOG_INPUT_PINS[] = {  A0,  A1,  A2,  A3,  A4,  A5,  A6,  A7 };
 
 #define MASTER_INIT_WAIT_DURATION 8000
 
-Adafruit_NeoPixel strip30(CANDLE_COUNT * 2, LED_PIN_30M, NEO_GRB + NEO_KHZ800);
-Adafruit_NeoPixel strip60(CANDLE_COUNT * 3, LED_PIN_30M, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel strip(CANDLE_COUNT * LEDS_PER_CANDLE, LED_PIN, NEO_GRB + NEO_KHZ800);
 
 long lightChangeTimestamp[CANDLE_COUNT] = { -1 };
 boolean candleIsLit[CANDLE_COUNT] = {  false };
-
-long ledColors30[CANDLE_COUNT * 2];
-long ledColors60[CANDLE_COUNT * 3];
-
+long ledColors[CANDLE_COUNT * LEDS_PER_CANDLE];
 int candleStrength[CANDLE_COUNT] = { 0 };
 
 boolean remoteEnabled;
@@ -64,17 +60,11 @@ void setup() {
   commSetup();
   pinMode(SPEAKER_PIN, OUTPUT);
   pinMode(REMOTE_ENABLE_PIN, INPUT_PULLUP);
-  strip30.begin();
-  strip30.show();
-  strip30.setBrightness(255);
-  strip60.begin();
-  strip60.show();
-  strip60.setBrightness(255);
-  for (int i = 0; i < strip30.numPixels(); i++) {
-    ledColors30[i] = strip30.gamma32(strip30.ColorHSV(65536L / strip30.numPixels() * i));
-  }
-  for (int i = 0; i < strip60.numPixels(); i++) {
-    ledColors60[i] = strip60.gamma32(strip60.ColorHSV(65536L / strip60.numPixels() * i));
+  strip.begin();
+  strip.show();
+  strip.setBrightness(255);
+  for (int i = 0; i < strip.numPixels(); i++) {
+    ledColors[i] = strip.gamma32(strip.ColorHSV(65536L / strip.numPixels() * i));
   }
   lastRemoteEnabledState = !digitalRead(REMOTE_ENABLE_PIN);
   Serial.print("initial remote state: ");
@@ -314,6 +304,7 @@ void onNewCandlesState(int newCandles) {
           candleStrength[candle] = MAX_INTENSITY;
         }
         if ((!(newCandles & mask)) && (candles & mask)) { // turn off current candle, per remote state
+          Serial.print("turning off candle # "); Serial.println(candle);
           for (int intensity = MAX_INTENSITY; intensity >= 0; intensity -= REMOTE_TURN_ON_OFF_RATE) {
             turnCandle(candle, intensity);
             sound(440 + 5 * intensity, 10, 10);
