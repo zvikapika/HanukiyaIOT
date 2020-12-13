@@ -20,21 +20,29 @@ void handleIncomingLine(String line) {
     if (colonIndex > -1) {
       String pName = line.substring(0, colonIndex);
       String pValue = line.substring(colonIndex + 1);
-      Serial.println(String("setting ") + pName + " to " + pValue);
-      if (pName == "master") {
-        onNewMaster(pValue.toInt());
+      Serial.print("got remote parameter set: "); 
+      Serial.print(pName); 
+      Serial.print("="); 
+      Serial.println(pValue);
+      if (remoteEnabled) {
+        if (pName == "master") {
+          onNewMaster(pValue.toInt());
+        }
+        else if (pName == "candles") {
+          onNewCandlesState(pValue.toInt());
+        }
+        else if (pName == "mode") {
+          onNewMode(pValue.toInt());
+        }
+        else if (pName == "param1") {
+          onNewParam1(pValue.toInt());
+        }
+        else if (pName == "param2") {
+          onNewParam2(pValue);
+        }
       }
-      else if (pName == "candles") {
-        onNewCandlesState(pValue.toInt());
-      }
-      else if (pName == "mode") {
-        onNewMode(pValue.toInt());
-      }
-      else if (pName == "param1") {
-        onNewParam1(pValue.toInt());
-      }
-      else if (pName == "param2") {
-        onNewParam2(pValue);
+      else {
+        Serial.println("parameter not set, remote mode disabled");
       }
     }
     else {

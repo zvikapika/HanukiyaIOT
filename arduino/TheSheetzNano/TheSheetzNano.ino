@@ -1,33 +1,16 @@
 #include <Adafruit_NeoPixel.h>
 #include "util_utils.h"
 
-#define MODE_COUNT 4
-#include "comm_utils.h"
-
-#define SPEAKER_PIN 7
-#include "song_utils.h"
-
 #define MY_ID 1
 
-int master = -1;
-int candles = 0;
-int mode = 0;
-int param1;
-String param2;
+#define LEDS_PER_CANDLE 2
+//#define LEDS_PER_CANDLE 3
 
-//#define LEDS_PER_CANDLE 2
-#define LEDS_PER_CANDLE 3
+#define LED_PIN 6
+//#define LED_PIN 8
 
-#define REMOTE_TURN_ON_OFF_RATE 5
-#define SCREENSAVER_ACTIVATION_DURATION 120
-#define CANDLE_TURN_ON_OFF_SOUND
-
-//#define LED_PIN 6
-#define LED_PIN 8
-#define REMOTE_ENABLE_PIN 12
-
-byte ANALOG_INPUT_PINS[] = {  A0,  A1,  A2,  A3,  A4,  A5,  A6,  A7 };
-#define SENSOR_REVERSED true
+//#define SENSOR_REVERSED true
+#define SENSOR_REVERSED false
 
 #define CANDLE_COUNT 8
 #define SENSOR_TURN_ON_THRESHOLD 150
@@ -38,7 +21,25 @@ byte ANALOG_INPUT_PINS[] = {  A0,  A1,  A2,  A3,  A4,  A5,  A6,  A7 };
 #define MAX_INTENSITY 255
 #define MIN_INTENSITY 0
 
-#define MASTER_INIT_WAIT_DURATION 8000
+#define REMOTE_TURN_ON_OFF_RATE 5
+#define SCREENSAVER_ACTIVATION_DURATION_SECS 15
+#define CANDLE_TURN_ON_OFF_SOUND
+
+#define REMOTE_ENABLE_PIN 12
+byte ANALOG_INPUT_PINS[] = {  A7, A6, A5, A4, A3, A2, A1, A0 };
+
+#define SPEAKER_PIN 7
+#include "song_utils.h"
+
+#define MODE_COUNT 2
+boolean remoteEnabled;
+#include "comm_utils.h"
+
+int master = -1;
+int candles = 0;
+int mode = 0;
+int param1;
+String param2;
 
 Adafruit_NeoPixel strip(CANDLE_COUNT * LEDS_PER_CANDLE, LED_PIN, NEO_GRB + NEO_KHZ800);
 
@@ -47,12 +48,9 @@ boolean candleIsLit[CANDLE_COUNT] = {  false };
 long ledColors[CANDLE_COUNT * LEDS_PER_CANDLE];
 int candleStrength[CANDLE_COUNT] = { 0 };
 
-boolean remoteEnabled;
 boolean lastRemoteEnabledState;
 int currentHanukkahSong = 0;
-int printCounter = 0;
 boolean masterInit = false;
-
 long lastActivityTstamp = 0;
 
 void setup() {
@@ -73,50 +71,33 @@ void setup() {
     rainbow(100);
   }
   else {
-    colorSwipe(100, 0x0000ff | 0x0000ff << 16); // purple
+    colorSwipe(100, 0x0000ff | (0x0000ff << 16)); // purple
   }
-
+  delay(1000);
   // scan for mode configuration on startup
   for (int candle = 0; candle < CANDLE_COUNT; ++candle) {
     if (sensorBeingLit(candle)) {
-      mode = candle;
-      for (int i = 0; i < 3; ++i) {
-        for (int j = 0; j <= candle; ++j) {
-          turnCandle(j, MAX_INTENSITY);
-        }
-        delay(250);
-        for (int j = 0; j <= candle; ++j) {
-          turnCandle(j, MIN_INTENSITY);
-        }
-        delay(250);
-      }
+      // no need to compansate for reverse sensor order, sensorBeingLit takes care of that
+      mode = candle + 1;
+      Serial.print("mode selected: "); Serial.println(mode);
+      signalSelectedMode(candle);
     }
   }
 }
 
 void loop() {
-  // for good order, master should turn off all candles (in the cloud) upon startup.
+  // for good order, master should reset Hanukiya state in the cloud upon startup.
   // but first it needs to know whether its the master or not, via network.
-  // all at the same time, the local mode should be catered, if the user changes the switch.
+  // all at the same time, the local mode should be catered, if requested
   // hence this if.
   if (!masterInit && master > -1) {
     masterInit = true;
     if (isMaster()) {
       Serial.println("i AM master");
-      candles = 0;
-      updateCandles(candles);
-      delay(500); // be nice to firebase server
-      mode = 0;
-      updateMode(mode);
-      delay(500); // be nice to firebase server
-      param1 = 0;
-      updateParam1(param1);
-      delay(500); // be nice to firebase server
-      param2 = "*";
-      updateParam2(param2);
+      onMasterInit();
     }
     else {
-      Serial.println("i AM NOT master. next time");
+      Serial.println("i AM NOT master. maybe next time");
     }
   }
 
@@ -258,7 +239,7 @@ void onRemoteSwitchChanged(boolean newRemoteState) {
   }
 }
 
-void  handleRemoteSwitch() {
+void handleRemoteSwitch() {
   remoteEnabled = !digitalRead(REMOTE_ENABLE_PIN);
   if (remoteEnabled != lastRemoteEnabledState) {
     lastRemoteEnabledState = remoteEnabled;
@@ -287,71 +268,95 @@ void onNewMaster(int newMaster) {
 }
 
 void onNewCandlesState(int newCandles) {
-  if (!isMaster()) {
-    Serial.print("got candles:"); Serial.println(candles);
-    if (candles != newCandles) {
-      for (int candle = 0; candle < CANDLE_COUNT; ++candle) {
-        int mask = 1 << candle;
-        if ((newCandles & mask) && (!(candles & mask))) { // light up current candle, per remote state
-          Serial.print("lighting up candle # "); Serial.println(candle);
-          for (int intensity = 0; intensity < MAX_INTENSITY; intensity += REMOTE_TURN_ON_OFF_RATE) {
-            turnCandle(candle, intensity);
-            sound(440 + 5 * intensity, 5, 10);
-          }
-          noSound();
-          lightChangeTimestamp[candle] = -1;
-          candleIsLit[candle] = true;
-          candleStrength[candle] = MAX_INTENSITY;
-        }
-        if ((!(newCandles & mask)) && (candles & mask)) { // turn off current candle, per remote state
-          Serial.print("turning off candle # "); Serial.println(candle);
-          for (int intensity = MAX_INTENSITY; intensity >= 0; intensity -= REMOTE_TURN_ON_OFF_RATE) {
-            turnCandle(candle, intensity);
-            sound(440 + 5 * intensity, 10, 10);
-          }
-          turnCandle(candle, MIN_INTENSITY);
-          noSound();
-          lightChangeTimestamp[candle] = -1;
-          candleIsLit[candle] = false;
-          candleStrength[candle] = MIN_INTENSITY;
-        }
-      }
-    }
-    candles = newCandles;
-    checkForFullHouse();
+  if (!remoteEnabled) {
+    Serial.print("in local mode, rejecting CANDLES update! SURA SERVER HAL'A SHCHOR!");
+    return; // just so that you don't have to scroll down
   }
   else {
-    Serial.println("candles set request rejected on master. oh and did I mention I am MASTER?");
+    if (!isMaster()) {
+      Serial.print("got candles:"); Serial.println(candles);
+      if (candles != newCandles) {
+        for (int candle = 0; candle < CANDLE_COUNT; ++candle) {
+          int mask = 1 << candle;
+          if ((newCandles & mask) && (!(candles & mask))) { // light up current candle, per remote state
+            Serial.print("lighting up candle # "); Serial.println(candle);
+            for (int intensity = 0; intensity < MAX_INTENSITY; intensity += REMOTE_TURN_ON_OFF_RATE) {
+              turnCandle(candle, intensity);
+              sound(440 + 5 * intensity, 5, 10);
+            }
+            noSound();
+            lightChangeTimestamp[candle] = -1;
+            candleIsLit[candle] = true;
+            candleStrength[candle] = MAX_INTENSITY;
+          }
+          if ((!(newCandles & mask)) && (candles & mask)) { // turn off current candle, per remote state
+            Serial.print("turning off candle # "); Serial.println(candle);
+            for (int intensity = MAX_INTENSITY; intensity >= 0; intensity -= REMOTE_TURN_ON_OFF_RATE) {
+              turnCandle(candle, intensity);
+              sound(440 + 5 * intensity, 10, 10);
+            }
+            turnCandle(candle, MIN_INTENSITY);
+            noSound();
+            lightChangeTimestamp[candle] = -1;
+            candleIsLit[candle] = false;
+            candleStrength[candle] = MIN_INTENSITY;
+          }
+        }
+      }
+      candles = newCandles;
+      checkForFullHouse();
+    }
+    else {
+      Serial.println("candles set request rejected on master. oh and did I mention I am MASTER?");
+    }
   }
 }
 
 void onNewMode(int newMode) {
-  if (!isMaster()) {
-    mode = newMode;
-    Serial.print("got mode:"); Serial.println(mode);
+  if (!remoteEnabled) {
+    Serial.print("in local mode, rejecting MODE update! SURA SERVER HAL'A SHCHOR!");
+    return; // just so that you don't have to scroll down
   }
   else {
-    Serial.println("mode set request rejected on master. oh and did I mention I am MASTER?");
+    if (!isMaster()) {
+      mode = newMode;
+      Serial.print("got mode:"); Serial.println(mode);
+    }
+    else {
+      Serial.println("mode set request rejected on master. oh and did I mention I am MASTER?");
+    }
   }
 }
 
 void onNewParam1(int newParam1) {
-  if (!isMaster()) {
-    param1 = newParam1;
-    Serial.print("got param1:"); Serial.println(param1);
+  if (!remoteEnabled) {
+    Serial.print("in local mode, rejecting PARAM1 update! SURA SERVER HAL'A SHCHOR!");
+    return; // just so that you don't have to scroll down
   }
   else {
-    Serial.println("param1 set request rejected on master. oh and did I mention I am MASTER?");
+    if (!isMaster()) {
+      param1 = newParam1;
+      Serial.print("got param1:"); Serial.println(param1);
+    }
+    else {
+      Serial.println("param1 set request rejected on master. oh and did I mention I am MASTER?");
+    }
   }
 }
 
 void onNewParam2(String newParam2) {
-  if (!isMaster()) {
-    param2 = newParam2;
-    Serial.print("got param2:"); Serial.print(param2); Serial.println();
+  if (!remoteEnabled) {
+    Serial.print("in local mode, rejecting PARAM2 update! SURA SERVER HAL'A SHCHOR!");
+    return; // just so that you don't have to scroll down
   }
   else {
-    Serial.println("param2 set request rejected on master. oh and did I mention I am MASTER?");
+    if (!isMaster()) {
+      param2 = newParam2;
+      Serial.print("got param2:"); Serial.print(param2); Serial.println();
+    }
+    else {
+      Serial.println("param2 set request rejected on master. oh and did I mention I am MASTER?");
+    }
   }
 }
 
@@ -381,33 +386,54 @@ void noSound() {
 }
 
 boolean screensaverOn = false;
+int currSSIntensity = 0;
+int currSSIntensityDir = 1;
 
 void handleScreensaver() {
   if (screensaverOn) {
-    if (millis() - lastActivityTstamp < SCREENSAVER_ACTIVATION_DURATION) {
+    if ((millis() - lastActivityTstamp) / 1000 < SCREENSAVER_ACTIVATION_DURATION_SECS) {
       screensaverOn = false;
-      // TODO: retrieve led state from memory
+      // retrieve led state from memory
+      for (int i = 0; i < CANDLE_COUNT; ++i) {
+        if (candleIsLit[i]) {
+          turnCandle(i, MAX_INTENSITY);
+        }
+        else {
+          turnCandle(i, MIN_INTENSITY);
+        }
+      }
     }
   }
   else {
-    if (millis() - lastActivityTstamp > SCREENSAVER_ACTIVATION_DURATION) {
+    if ((millis() - lastActivityTstamp) / 1000 > SCREENSAVER_ACTIVATION_DURATION_SECS) {
       screensaverOn = true;
       // TODO: remember existing led state
+      // nothing to do, already stored in candleIsLit[] array
     }
   }
   if (screensaverOn) {
-    // TODO: update screensaver
+    for (int i = 0; i < CANDLE_COUNT; ++i) {
+      if (candleIsLit[i]) {
+        turnCandle(i, currSSIntensity);
+      }
+    }
+    currSSIntensity = currSSIntensity + currSSIntensityDir;
+    if(currSSIntensity == MAX_INTENSITY || currSSIntensity == MIN_INTENSITY) {
+      currSSIntensityDir *= -1;
+    }
   }
 }
 
 boolean sensorBeingLit(int candleIndex) {
   int sensorValue = analogRead(SENSOR_REVERSED ? ANALOG_INPUT_PINS[CANDLE_COUNT - candleIndex - 1] : ANALOG_INPUT_PINS[candleIndex]);
+  //  int sensorValue = analogRead(SENSOR_REVERSED ? ANALOG_INPUT_PINS[candleIndex] : ANALOG_INPUT_PINS[CANDLE_COUNT - candleIndex - 1]);
   return (sensorValue < SENSOR_TURN_ON_THRESHOLD);
 }
 
 
 boolean sensorBeingDarkened(int candleIndex) {
   int sensorValue = analogRead(SENSOR_REVERSED ? ANALOG_INPUT_PINS[CANDLE_COUNT - candleIndex - 1] : ANALOG_INPUT_PINS[candleIndex]);
+  //  int sensorValue = analogRead(SENSOR_REVERSED ? ANALOG_INPUT_PINS[candleIndex] : ANALOG_INPUT_PINS[CANDLE_COUNT - candleIndex - 1]);
   return (sensorValue > SENSOR_TURN_OFF_THRESHOLD);
 }
 
@@ -415,5 +441,41 @@ void checkForFullHouse() {
   if (candles == 0xff) {
     song(currentHanukkahSong, 0.4);
     currentHanukkahSong = (currentHanukkahSong + 1) % SONG_COUNT;
+  }
+}
+
+void onMasterInit() {
+  candles = 0;
+  updateCandles(candles);
+  delay(500); // be nice to firebase server
+  // mode = 0;
+  updateMode(mode);
+  delay(500); // be nice to firebase server
+  param1 = 0;
+  updateParam1(param1);
+  delay(500); // be nice to firebase server
+  param2 = "*";
+  updateParam2(param2);
+}
+
+byte sirenSpeed[] = {20, 15, 10, 5, 4, 3, 2, 1, 1, 1, 1};
+
+void signalSelectedMode(int candle) {
+  for (int s = 0; s < sizeof(sirenSpeed); ++s) {
+    for (int siren = 440; siren < 3520; siren += 10) {
+      tone(SPEAKER_PIN, siren);
+      delayMicroseconds(sirenSpeed[s] * 100);
+    }
+  }
+  noTone(SPEAKER_PIN);
+  for (int i = 0; i < 3; ++i) {
+    for (int j = 0; j <= candle; ++j) {
+      turnCandle(j, MAX_INTENSITY);
+    }
+    delay(500);
+    for (int j = 0; j <= candle; ++j) {
+      turnCandle(j, MIN_INTENSITY);
+    }
+    delay(500);
   }
 }
